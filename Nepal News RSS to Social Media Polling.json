@@ -1,0 +1,1171 @@
+{
+  "name": "Nepal News RSS to Social Media Polling",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "nepal-news-automation",
+        "options": {}
+      },
+      "id": "229435c0-2e1b-4bef-8ff3-5edfddc05b90",
+      "name": "Webhook - Main Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "nepal-news-webhook"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "rss-sources",
+              "name": "rss_sources",
+              "value": "={{ $json.query.sources || 'https://kathmandupost.com/rss,https://myrepublica.nagariknetwork.com/rss.php,https://thehimalayantimes.com/rss' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d24414f9-03db-4073-b635-0d55a9d7d2d1",
+      "name": "Extract RSS Sources",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [
+        448,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// This node will now receive multiple sources and process them all\nconst sources = $input.all();\nconst results = [];\n\nfor (const item of sources) {\n  const sourceUrl = item.json.source_url || item.json;\n  \n  try {\n    // Fetch each RSS feed\n    // This will be handled by HTTP Request node in batch\n    results.push({\n      json: {\n        source_url: sourceUrl,\n        status: 'queued'\n      }\n    });\n  } catch (error) {\n    results.push({\n      json: {\n        source_url: sourceUrl,\n        status: 'error',\n        error: error.message\n      }\n    });\n  }\n}\n\nreturn results;"
+      },
+      "id": "68d0e3b6-8408-49c2-8cbb-021410afff4e",
+      "name": "Split Sources to Array",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.source_url }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "db6d4e2f-1508-4892-8e7f-c1ffc552a9ea",
+      "name": "Fetch RSS Feed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        0
+      ],
+      "alwaysOutputData": true,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.source_url }}",
+        "options": {}
+      },
+      "id": "c68632e4-1890-496f-8048-675d79f86da6",
+      "name": "Parse RSS Feed",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1,
+      "position": [
+        1104,
+        0
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Clean and structure RSS data\nconst items = $input.all();\nconst cleanedItems = [];\n\nfor (const item of items) {\n  try {\n    const data = item.json;\n    \n    // Extract and clean data\n    const cleanItem = {\n      title: data.title || data.item?.title || 'No Title',\n      description: (data.description || data.content || data.summary || '').replace(/<[^>]*>/g, '').substring(0, 500),\n      url: data.link || data.url || '',\n      published_date: data.pubDate || data.isoDate || data.date || new Date().toISOString(),\n      source_url: data.source_url || $('Split Sources to Array').first().json.source_url,\n      raw_content: data.contentSnippet || data.description || ''\n    };\n    \n    // Only add if we have title and URL\n    if (cleanItem.title !== 'No Title' && cleanItem.url) {\n      cleanedItems.push({ json: cleanItem });\n    }\n  } catch (error) {\n    // Skip items that can't be processed\n    continue;\n  }\n}\n\nreturn cleanedItems.length > 0 ? cleanedItems : [{ json: { error: 'No valid items found' } }];"
+      },
+      "id": "6c411ee3-8d36-4add-bd14-2fc7883fc90c",
+      "name": "Clean RSS Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4.1-MINI"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Analyze this Nepal news article and categorize it into exactly ONE of these categories: Politics, Economy, Sports, Entertainment, Technology, Health, Education, Infrastructure, Culture, International, Crime, Weather, Other.\n\nTitle: {{ $json.title }}\nDescription: {{ $json.description }}\n\nRespond with ONLY the category name, nothing else."
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 20,
+          "temperature": 0.1
+        }
+      },
+      "id": "1b22874e-1980-4ec0-8efe-687add9f0fa1",
+      "name": "Categorize News (OpenAI)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.4,
+      "position": [
+        1552,
+        0
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "mfeDiwAy4NlCDMjZ",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "category-field",
+              "name": "category",
+              "value": "={{ $json.message?.content?.trim() || 'Other' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "d2e1b304-52ca-44d4-8dd5-8243c47ccbf0",
+      "name": "Add Category",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [
+        1760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Convert this Nepal news into an engaging polling question with exactly 4 multiple choice answers for social media.\n\nTitle: {{ $json.title }}\nDescription: {{ $json.description }}\nCategory: {{ $json.category }}\n\nYou MUST respond in this EXACT JSON format with no additional text:\n{\n  \"question\": \"Your engaging polling question here\",\n  \"options\": [\"Option A\", \"Option B\", \"Option C\", \"Option D\"],\n  \"context\": \"Brief 1-2 sentence context about the news\"\n}"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 400,
+          "temperature": 0.7
+        }
+      },
+      "id": "7b8091db-fa59-44d5-a667-83f040cb56a9",
+      "name": "Create Poll Question (OpenAI)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.4,
+      "position": [
+        1984,
+        0
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "mfeDiwAy4NlCDMjZ",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get data from previous nodes\nconst pollResponse = $input.first().json;\nconst categoryData = $('Add Category').first().json;\n\n// Parse AI poll response\nlet pollData;\ntry {\n  const aiContent = pollResponse.message?.content || pollResponse.choices?.[0]?.message?.content || '{}';\n  const jsonMatch = aiContent.match(/\\{[\\s\\S]*\\}/);\n  \n  if (jsonMatch) {\n    pollData = JSON.parse(jsonMatch[0]);\n  } else {\n    throw new Error('No JSON found in AI response');\n  }\n} catch (error) {\n  // Fallback if AI response parsing fails\n  pollData = {\n    question: `What is your opinion on: ${categoryData.title}?`,\n    options: ['Very Positive', 'Positive', 'Negative', 'Very Negative'],\n    context: categoryData.description?.substring(0, 150) || 'No context available'\n  };\n}\n\n// Ensure exactly 4 options\nif (!Array.isArray(pollData.options) || pollData.options.length !== 4) {\n  pollData.options = ['Option A', 'Option B', 'Option C', 'Option D'];\n}\n\n// Return ONLY the fields needed for Supabase (no OpenAI metadata)\nreturn {\n  json: {\n    // Original RSS data\n    title: categoryData.title || 'Untitled News',\n    description: categoryData.description || '',\n    url: categoryData.url || '',\n    published_date: categoryData.published_date || new Date().toISOString(),\n    source_url: categoryData.source_url || '',\n    \n    // AI-generated data\n    category: categoryData.category || 'Other',\n    poll_question: pollData.question || pollData.poll_question || 'No question',\n    poll_options: JSON.stringify(pollData.options), // Store as JSON string\n    poll_context: pollData.context || pollData.poll_context || categoryData.description?.substring(0, 200) || '',\n    \n    // Metadata\n    created_at: new Date().toISOString(),\n    status: 'pending_approval'\n  }\n};"
+      },
+      "id": "36dc62eb-6ead-42a5-94c0-4acdafaabe61",
+      "name": "Process Poll Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2208,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "tableId": "news_polls",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "title",
+              "fieldValue": "={{ $json.title }}"
+            },
+            {
+              "fieldId": "description",
+              "fieldValue": "={{ $json.description }}"
+            },
+            {
+              "fieldId": "url",
+              "fieldValue": "={{ $json.url }}"
+            },
+            {
+              "fieldId": "published_date",
+              "fieldValue": "={{ $json.published_date }}"
+            },
+            {
+              "fieldId": "source_url",
+              "fieldValue": "={{ $json.source_url }}"
+            },
+            {
+              "fieldId": "category",
+              "fieldValue": "={{ $json.category }}"
+            },
+            {
+              "fieldId": "poll_question",
+              "fieldValue": "={{ $json.poll_question }}"
+            },
+            {
+              "fieldId": "poll_options",
+              "fieldValue": "={{ $json.poll_options }}"
+            },
+            {
+              "fieldId": "poll_context",
+              "fieldValue": "={{ $json.poll_context }}"
+            },
+            {
+              "fieldId": "created_at",
+              "fieldValue": "={{ $json.created_at }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "={{ $json.status }}"
+            }
+          ]
+        }
+      },
+      "id": "aea5e18d-4b16-42c5-8a7e-4f36b9d14929",
+      "name": "Store in Supabase",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2432,
+        0
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "2T23U5z02FSqxCnu",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "news_polls",
+        "returnAll": true,
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "status",
+              "condition": "eq",
+              "keyValue": "pending_approval"
+            }
+          ]
+        }
+      },
+      "id": "8af74fcb-4f1a-4f9f-ac0c-fd6434bac5aa",
+      "name": "Get Pending Polls",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2864,
+        0
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "2T23U5z02FSqxCnu",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Create social media posts for all platforms\nconst items = $input.all();\nconst allPosts = [];\n\nfor (const item of items) {\n  const data = item.json;\n  \n  // Parse poll options\n  let options = [];\n  try {\n    options = JSON.parse(data.poll_options);\n  } catch {\n    options = [data.poll_option_1, data.poll_option_2, data.poll_option_3, data.poll_option_4].filter(Boolean);\n  }\n  \n  const optionsText = options.map((opt, idx) => `${String.fromCharCode(65 + idx)}. ${opt}`).join('\\n');\n  const pollId = data.id;\n  \n  // Facebook Post\n  allPosts.push({\n    platform: 'facebook',\n    poll_id: pollId,\n    title: data.title,\n    content: `🗳️ **${data.poll_question}**\\n\\n📰 ${data.poll_context}\\n\\n${optionsText}\\n\\n💭 What's your opinion? Vote in comments!\\n\\n#NepalNews #${data.category} #Poll #Nepal #PublicOpinion`,\n    hashtags: `#NepalNews #${data.category} #Poll #Nepal`,\n    post_type: 'poll',\n    poll_data: JSON.stringify({ question: data.poll_question, options }),\n    status: 'draft',\n    created_at: new Date().toISOString()\n  });\n  \n  // Instagram Post\n  allPosts.push({\n    platform: 'instagram',\n    poll_id: pollId,\n    title: data.title,\n    content: `🗳️ ${data.poll_question}\\n\\n📰 ${data.poll_context}\\n\\n${optionsText}\\n\\n💬 Drop your answer in comments!\\n\\n#NepalNews #${data.category} #InstaPoll #Nepal #Voting #NepalPolls`,\n    hashtags: `#NepalNews #${data.category} #InstaPoll #Nepal #Voting`,\n    post_type: 'poll',\n    poll_data: JSON.stringify({ question: data.poll_question, options }),\n    status: 'draft',\n    created_at: new Date().toISOString()\n  });\n  \n  // LinkedIn Post\n  allPosts.push({\n    platform: 'linkedin',\n    poll_id: pollId,\n    title: data.title,\n    content: `📊 ${data.poll_question}\\n\\nContext: ${data.poll_context}\\n\\nOptions:\\n${optionsText}\\n\\nShare your professional perspective on this ${data.category.toLowerCase()} matter in Nepal.\\n\\n#NepalBusiness #${data.category} #ProfessionalOpinion #Nepal #Leadership`,\n    hashtags: `#NepalBusiness #${data.category} #LinkedIn #Nepal`,\n    post_type: 'poll',\n    poll_data: JSON.stringify({ question: data.poll_question, options }),\n    status: 'draft',\n    created_at: new Date().toISOString()\n  });\n}\n\nreturn allPosts.map(post => ({ json: post }));"
+      },
+      "id": "720e4f3f-b163-4023-8c4d-ef484c84a345",
+      "name": "Create Social Media Posts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3088,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "tableId": "social_media_posts",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "platform",
+              "fieldValue": "={{ $json.platform }}"
+            },
+            {
+              "fieldId": "poll_id",
+              "fieldValue": "={{ $json.poll_id }}"
+            },
+            {
+              "fieldId": "title",
+              "fieldValue": "={{ $json.title }}"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $json.content }}"
+            },
+            {
+              "fieldId": "hashtags",
+              "fieldValue": "={{ $json.hashtags }}"
+            },
+            {
+              "fieldId": "post_type",
+              "fieldValue": "={{ $json.post_type }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "={{ $json.status }}"
+            },
+            {
+              "fieldId": "created_at",
+              "fieldValue": "={{ $json.created_at }}"
+            }
+          ]
+        }
+      },
+      "id": "1dd7d188-52e8-4f87-8948-29bd7499f928",
+      "name": "Store Social Posts",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3312,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "supabaseApi": {
+          "id": "2T23U5z02FSqxCnu",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "mandeepdhakal11@gmail.com",
+        "toEmail": "aryandhakal60@gmail.com",
+        "subject": "🗳️ New Nepal News Polls Ready for Review",
+        "emailFormat": "text",
+        "text": "=// In Email Admin Notification node\n{\n  \"emailType\": \"text\",\n  \"message\": \"={{\n    const data = $json;\n    const stats = data.stats;\n    const polls = data.polls;\n    \n    let message = `Nepal News Polls - Execution Summary\n    \n📊 STATISTICS\n━━━━━━━━━━━━━━━━━━━━\n- Total Polls Created: ${stats.total_polls}\n- Total Social Posts: ${stats.total_posts}\n\n📑 BY CATEGORY\n━━━━━━━━━━━━━━━━━━━━\n`;\n    \n    Object.entries(stats.by_category).forEach(([cat, count]) => {\n      message += `• ${cat}: ${count} poll(s)\\n`;\n    });\n    \n    message += `\n📱 BY PLATFORM\n━━━━━━━━━━━━━━━━━━━━\n`;\n    \n    Object.entries(stats.by_platform).forEach(([platform, count]) => {\n      message += `• ${platform}: ${count} post(s)\\n`;\n    });\n    \n    message += `\n📰 POLL DETAILS\n━━━━━━━━━━━━━━━━━━━━\n\n`;\n    \n    polls.forEach((poll, idx) => {\n      message += `${idx + 1}. ${poll.title}\n   Category: ${poll.category}\n   Question: ${poll.question}\n   Platforms: ${poll.platforms.join(', ')}\n   \n`;\n    });\n    \n    message += `\n🔗 ADMIN DASHBOARD\n━━━━━━━━━━━━━━━━━━━━\n${$env.WEBHOOK_URL}/webhook/admin-dashboard\n\nExecution Time: ${data.execution_time}\n`;\n    \n    return message;\n  }}\"\n}",
+        "options": {}
+      },
+      "id": "9f805abd-023b-41b9-bf23-d1d6cc66b9e1",
+      "name": "Email Admin Notification",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        3792,
+        0
+      ],
+      "webhookId": "1bf32789-ccb5-482e-a3cc-5a5e60e0f3c3",
+      "credentials": {
+        "smtp": {
+          "id": "TB26yCpmKfJOxChF",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "path": "admin-dashboard",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "901b7327-d362-400b-a6e8-956a8ee53fe3",
+      "name": "Webhook - Admin Dashboard",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        400
+      ],
+      "webhookId": "admin-dashboard-webhook"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "social_media_posts",
+        "returnAll": true,
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "status",
+              "condition": "eq",
+              "keyValue": "draft"
+            }
+          ]
+        }
+      },
+      "id": "35a23a3a-b47c-4952-8699-cf6e825cbc1c",
+      "name": "Get Draft Posts from DB",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        224,
+        400
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "2T23U5z02FSqxCnu",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate HTML admin dashboard\nconst posts = $input.all();\nconst groupedPosts = {};\n\n// Group posts by poll_id\nfor (const item of posts) {\n  const post = item.json;\n  const pollId = String(post.poll_id); // Ensure pollId is a string\n  \n  if (!groupedPosts[pollId]) {\n    groupedPosts[pollId] = [];\n  }\n  groupedPosts[pollId].push(post);\n}\n\nlet pollSections = '';\n\nObject.entries(groupedPosts).forEach(([pollId, postsList]) => {\n  const firstPost = postsList[0];\n  pollSections += `\n    <div class=\"poll-group\">\n      <div class=\"poll-title\">📰 ${firstPost.title || 'Untitled Poll'}</div>\n      <div class=\"poll-meta\">Poll ID: ${pollId} | Category: ${firstPost.hashtags?.split('#')[1] || 'General'}</div>\n  `;\n  \n  postsList.forEach(post => {\n    const platformClass = post.platform.toLowerCase();\n    pollSections += `\n      <div class=\"post-item\">\n        <span class=\"platform ${platformClass}\">${post.platform.toUpperCase()}</span>\n        <div class=\"post-content\">${post.content.replace(/\\n/g, '<br>')}</div>\n        <div class=\"actions\">\n          <button class=\"approve-btn\" onclick=\"handlePost(${post.id}, 'approve')\">✅ Approve & Post</button>\n          <button class=\"reject-btn\" onclick=\"handlePost(${post.id}, 'reject')\">❌ Reject</button>\n        </div>\n      </div>\n    `;\n  });\n  \n  pollSections += `    </div>`;\n});\n\nconst html = `\n<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>Nepal News Polls - Admin Dashboard</title>\n    <style>\n        * { margin: 0; padding: 0; box-sizing: border-box; }\n        body { \n            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;\n            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n            min-height: 100vh;\n            padding: 20px;\n        }\n        .container { \n            max-width: 1200px; \n            margin: 0 auto; \n            background: white;\n            border-radius: 12px;\n            box-shadow: 0 10px 40px rgba(0,0,0,0.2);\n            overflow: hidden;\n        }\n        .header {\n            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n            color: white;\n            padding: 30px;\n            text-align: center;\n        }\n        .header h1 { font-size: 32px; margin-bottom: 10px; }\n        .header p { font-size: 16px; opacity: 0.9; }\n        .main-content { padding: 30px; }\n        .poll-group { \n            background: #f8f9fa; \n            margin: 25px 0; \n            padding: 25px; \n            border-radius: 8px; \n            box-shadow: 0 2px 8px rgba(0,0,0,0.08);\n        }\n        .poll-title { \n            font-size: 20px; \n            font-weight: 600; \n            margin-bottom: 8px; \n            color: #2c3e50;\n        }\n        .poll-meta {\n            font-size: 14px;\n            color: #7f8c8d;\n            margin-bottom: 20px;\n        }\n        .post-item { \n            margin: 15px 0; \n            padding: 20px; \n            background: white;\n            border: 1px solid #e1e8ed;\n            border-radius: 8px;\n            transition: all 0.3s;\n        }\n        .post-item:hover {\n            box-shadow: 0 4px 12px rgba(0,0,0,0.1);\n            transform: translateY(-2px);\n        }\n        .platform { \n            display: inline-block; \n            padding: 6px 12px; \n            color: white; \n            border-radius: 20px; \n            font-size: 12px; \n            font-weight: 600;\n            text-transform: uppercase;\n            letter-spacing: 0.5px;\n        }\n        .facebook { background: linear-gradient(135deg, #1877f2 0%, #0c5bbf 100%); }\n        .instagram { background: linear-gradient(135deg, #f58529 0%, #dd2a7b 50%, #8134af 100%); }\n        .linkedin { background: linear-gradient(135deg, #0077b5 0%, #005885 100%); }\n        .post-content { \n            margin: 15px 0; \n            white-space: pre-wrap; \n            line-height: 1.6;\n            color: #34495e;\n            font-size: 14px;\n        }\n        .actions {\n            margin-top: 15px;\n            display: flex;\n            gap: 10px;\n        }\n        .approve-btn, .reject-btn { \n            border: none; \n            padding: 10px 20px; \n            border-radius: 6px; \n            cursor: pointer; \n            font-weight: 600;\n            font-size: 14px;\n            transition: all 0.3s;\n            flex: 1;\n        }\n        .approve-btn { \n            background: linear-gradient(135deg, #28a745 0%, #20873a 100%);\n            color: white; \n        }\n        .approve-btn:hover { \n            transform: scale(1.05);\n            box-shadow: 0 4px 12px rgba(40, 167, 69, 0.4);\n        }\n        .reject-btn { \n            background: linear-gradient(135deg, #dc3545 0%, #b02a37 100%);\n            color: white; \n        }\n        .reject-btn:hover {\n            transform: scale(1.05);\n            box-shadow: 0 4px 12px rgba(220, 53, 69, 0.4);\n        }\n        .empty-state {\n            text-align: center;\n            padding: 60px 20px;\n            color: #95a5a6;\n        }\n        .empty-state h2 { font-size: 24px; margin-bottom: 10px; }\n        .loading {\n            position: fixed;\n            top: 0;\n            left: 0;\n            right: 0;\n            bottom: 0;\n            background: rgba(0,0,0,0.7);\n            display: none;\n            align-items: center;\n            justify-content: center;\n            z-index: 1000;\n        }\n        .loading.active { display: flex; }\n        .spinner {\n            border: 4px solid #f3f3f3;\n            border-top: 4px solid #667eea;\n            border-radius: 50%;\n            width: 50px;\n            height: 50px;\n            animation: spin 1s linear infinite;\n        }\n        @keyframes spin {\n            0% { transform: rotate(0deg); }\n            100% { transform: rotate(360deg); }\n        }\n    </style>\n</head>\n<body>\n    <div class=\"container\">\n        <div class=\"header\">\n            <h1>🗳️ Nepal News Polls</h1>\n            <p>Admin Dashboard - Review and Approve Social Media Posts</p>\n        </div>\n        <div class=\"main-content\">\n            ${pollSections || '<div class=\"empty-state\"><h2>No pending posts</h2><p>All posts have been reviewed or there are no polls yet.</p></div>'}\n        </div>\n    </div>\n    \n    <div class=\"loading\" id=\"loading\">\n        <div class=\"spinner\"></div>\n    </div>\n    \n    <script>\n        function handlePost(postId, action) {\n            const actionText = action === 'approve' ? 'approve and post' : 'reject';\n            if (!confirm('Are you sure you want to ' + actionText + ' this post?')) return;\n            \n            document.getElementById('loading').classList.add('active');\n            \n            fetch('/webhook/approve-post', {\n                method: 'POST',\n                headers: { 'Content-Type': 'application/json' },\n                body: JSON.stringify({ postId: postId, action: action })\n            })\n            .then(response => response.json())\n            .then(data => {\n                alert('Post ' + action + 'ed successfully!');\n                location.reload();\n            })\n            .catch(error => {\n                alert('Error: ' + error.message);\n                document.getElementById('loading').classList.remove('active');\n            });\n        }\n    </script>\n</body>\n</html>\n`;\n\nreturn { json: { html } };"
+      },
+      "id": "49b3c705-8ca9-4692-9e22-8ec6be196593",
+      "name": "Generate Admin Dashboard HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "c7ce094f-e9fc-45b7-8a28-7f5dc95837d9",
+      "name": "Return Dashboard HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        672,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "approve-post",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "5e4bf46e-1bf8-4c3c-9846-c73f881aa266",
+      "name": "Webhook - Approve/Reject Post",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        704
+      ],
+      "webhookId": "approve-post-webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.body.action }}",
+              "value2": "approve"
+            }
+          ]
+        }
+      },
+      "id": "8809b8a4-4687-4683-b0d1-1d5433303839",
+      "name": "Check Action Type",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        224,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "social_media_posts",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $json.body.postId }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "={{ $json.body.action }}"
+            },
+            {
+              "fieldId": "posted_at",
+              "fieldValue": "={{ new Date().toISOString() }}"
+            }
+          ]
+        }
+      },
+      "id": "0438b246-e456-4526-a065-396b4ef323ef",
+      "name": "Approve Post in DB",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        448,
+        608
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "2T23U5z02FSqxCnu",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "social_media_posts",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $json.body.postId }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "posted_at",
+              "fieldValue": "={{ new Date().toISOString() }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "={{ $json.body.action }}"
+            }
+          ]
+        }
+      },
+      "id": "a1a8445d-3e08-40e7-8572-c2b5e0348381",
+      "name": "Reject Post in DB",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        448,
+        800
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "2T23U5z02FSqxCnu",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      },
+      "id": "4d077a30-e540-4317-8789-8e90ca7cb684",
+      "name": "Merge Actions",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [
+        672,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": true, \"message\": \"Post \" + $json.body.action + \"ed successfully\", \"postId\": $json.body.postId } }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "9a8458d0-c71b-4244-89bd-6f457bce2698",
+      "name": "Respond to Action",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        880,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "path": "poll-results",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "c23ac9be-8e29-4901-aded-414a13c7d168",
+      "name": "Webhook - Poll Results",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        1104
+      ],
+      "webhookId": "poll-results-webhook"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "poll_votes",
+        "returnAll": true,
+        "filterType": "none"
+      },
+      "id": "e534fa11-875c-44a4-be75-da01315d6f93",
+      "name": "Get All Poll Votes",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        224,
+        1104
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "2T23U5z02FSqxCnu",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate poll results and generate data for charts\nconst votes = $input.all();\nconst pollResults = {};\n\n// Group and count votes\nfor (const item of votes) {\n  const vote = item.json;\n  const pollId = vote.poll_id;\n  \n  if (!pollResults[pollId]) {\n    pollResults[pollId] = {\n      poll_id: pollId,\n      poll_question: vote.poll_question || 'Unknown Question',\n      total_votes: 0,\n      votes_by_option: {},\n      votes_by_platform: {}\n    };\n  }\n  \n  const result = pollResults[pollId];\n  result.total_votes++;\n  \n  // Count by option\n  const option = vote.selected_option;\n  if (!result.votes_by_option[option]) {\n    result.votes_by_option[option] = 0;\n  }\n  result.votes_by_option[option]++;\n  \n  // Count by platform\n  const platform = vote.platform || 'unknown';\n  if (!result.votes_by_platform[platform]) {\n    result.votes_by_platform[platform] = 0;\n  }\n  result.votes_by_platform[platform]++;\n}\n\n// Convert to array with chart data\nconst resultsArray = Object.values(pollResults).map(result => {\n  // Prepare data for pie chart\n  const chartData = Object.entries(result.votes_by_option).map(([option, count]) => ({\n    label: option,\n    value: count,\n    percentage: Math.round((count / result.total_votes) * 100)\n  })).sort((a, b) => b.value - a.value);\n  \n  return {\n    json: {\n      ...result,\n      chart_data: chartData,\n      winner: chartData[0],\n      chart_data_json: JSON.stringify(chartData)\n    }\n  };\n});\n\nreturn resultsArray.length > 0 ? resultsArray : [{ json: { message: 'No votes found' } }];"
+      },
+      "id": "9568a7a0-16f2-4d41-a6ae-687e4ea7e2ff",
+      "name": "Calculate Poll Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        1104
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate social media result posts\nconst results = $input.all();\nconst resultPosts = [];\n\nfor (const item of results) {\n  const data = item.json;\n  \n  if (!data.chart_data || !Array.isArray(data.chart_data)) continue;\n  \n  const pollId = data.poll_id;\n  const question = data.poll_question;\n  const totalVotes = data.total_votes;\n  const winner = data.winner;\n  \n  // Format results text\n  const resultsText = data.chart_data.map((item, idx) => \n    `${idx + 1}. ${item.label}: ${item.value} votes (${item.percentage}%)`\n  ).join('\\n');\n  \n  // Facebook Result Post\n  resultPosts.push({\n    platform: 'facebook',\n    poll_id: pollId,\n    content: `📊 **POLL RESULTS**\\n\\n❓ ${question}\\n\\n🏆 WINNER: ${winner.label} (${winner.percentage}%)\\n\\n📈 Full Results:\\n${resultsText}\\n\\n👥 Total Votes: ${totalVotes}\\n\\nThank you to everyone who participated! Your voice matters. 🙏\\n\\n#NepalNews #PollResults #Democracy #PublicOpinion`,\n    post_type: 'result',\n    chart_data: data.chart_data_json,\n    status: 'draft',\n    created_at: new Date().toISOString()\n  });\n  \n  // Instagram Result Post\n  resultPosts.push({\n    platform: 'instagram',\n    poll_id: pollId,\n    content: `📊 RESULTS ARE IN!\\n\\n${question}\\n\\n🏆 ${winner.label} WINS with ${winner.percentage}%!\\n\\n📊 Breakdown:\\n${resultsText}\\n\\n👥 ${totalVotes} people voted\\n\\nThanks for participating! 🙌\\n\\n#NepalNews #PollResults #InstaResults #Nepal #Voting`,\n    post_type: 'result',\n    chart_data: data.chart_data_json,\n    status: 'draft',\n    created_at: new Date().toISOString()\n  });\n  \n  // LinkedIn Result Post\n  resultPosts.push({\n    platform: 'linkedin',\n    poll_id: pollId,\n    content: `📊 Professional Poll Results\\n\\nQuestion: ${question}\\n\\n🎯 Key Findings:\\n• Leading opinion: ${winner.label} (${winner.percentage}%)\\n• Total professional responses: ${totalVotes}\\n• Engagement across platforms: Active\\n\\nDetailed Breakdown:\\n${resultsText}\\n\\nInsights: The data shows clear professional consensus on this ${question.includes('Economy') ? 'economic' : 'important'} matter.\\n\\nThank you to our professional network for these valuable insights.\\n\\n#NepalBusiness #DataDriven #ProfessionalInsights #Nepal`,\n    post_type: 'result',\n    chart_data: data.chart_data_json,\n    status: 'draft',\n    created_at: new Date().toISOString()\n  });\n}\n\nreturn resultPosts.map(post => ({ json: post }));"
+      },
+      "id": "56b8c9b3-d2a0-4ec1-ad72-a5e6e2813041",
+      "name": "Create Result Posts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        1104
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate results dashboard with charts\nconst results = $('Calculate Poll Results').all();\nconst posts = $input.all();\n\nif (!results || results.length === 0) {\n  return {\n    json: {\n      html: `\n<!DOCTYPE html>\n<html>\n<head>\n  <title>No Results</title>\n  <style>\n    body { font-family: Arial, sans-serif; padding: 40px; text-align: center; }\n    h1 { color: #7f8c8d; }\n  </style>\n</head>\n<body>\n  <h1>📊 No Poll Results Available</h1>\n  <p>There are no votes recorded yet. Please check back later.</p>\n</body>\n</html>\n`\n    }\n  };\n}\n\nlet chartSections = '';\nlet postSections = '';\n\n// Generate chart sections\nresults.forEach((item, index) => {\n  const data = item.json;\n  if (!data.chart_data) return;\n  \n  const chartId = `chart-${data.poll_id}-${index}`;\n  const labels = data.chart_data.map(d => d.label);\n  const values = data.chart_data.map(d => d.value);\n  const colors = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40'];\n  \n  chartSections += `\n    <div class=\"result-section\">\n      <h2>${data.poll_question}</h2>\n      <div class=\"stats\">\n        <div class=\"stat-box\">\n          <div class=\"stat-value\">${data.total_votes}</div>\n          <div class=\"stat-label\">Total Votes</div>\n        </div>\n        <div class=\"stat-box winner\">\n          <div class=\"stat-value\">${data.winner.label}</div>\n          <div class=\"stat-label\">Winner (${data.winner.percentage}%)</div>\n        </div>\n      </div>\n      <div class=\"chart-container\">\n        <canvas id=\"${chartId}\"></canvas>\n      </div>\n    </div>\n    <script>\n      new Chart(document.getElementById('${chartId}'), {\n        type: 'pie',\n        data: {\n          labels: ${JSON.stringify(labels)},\n          datasets: [{\n            data: ${JSON.stringify(values)},\n            backgroundColor: ${JSON.stringify(colors.slice(0, values.length))},\n            borderWidth: 2,\n            borderColor: '#ffffff'\n          }]\n        },\n        options: {\n          responsive: true,\n          maintainAspectRatio: false,\n          plugins: {\n            legend: {\n              position: 'right',\n              labels: {\n                padding: 15,\n                font: { size: 14 },\n                usePointStyle: true\n              }\n            },\n            tooltip: {\n              callbacks: {\n                label: function(context) {\n                  const label = context.label || '';\n                  const value = context.parsed || 0;\n                  const total = context.dataset.data.reduce((a, b) => a + b, 0);\n                  const percentage = Math.round((value / total) * 100);\n                  return label + ': ' + value + ' (' + percentage + '%)';\n                }\n              }\n            }\n          }\n        }\n      });\n    </script>\n  `;\n});\n\n// Group posts by poll_id\nconst postsByPoll = {};\nposts.forEach(item => {\n  const post = item.json;\n  if (!postsByPoll[post.poll_id]) {\n    postsByPoll[post.poll_id] = [];\n  }\n  postsByPoll[post.poll_id].push(post);\n});\n\n// Generate post sections\nObject.entries(postsByPoll).forEach(([pollId, posts]) => {\n  postSections += `<div class=\"posts-section\"><h3>Social Media Posts for Poll #${pollId}</h3>`;\n  \n  posts.forEach(post => {\n    postSections += `\n      <div class=\"post-preview\">\n        <div class=\"platform-badge ${post.platform}\">${post.platform.toUpperCase()}</div>\n        <div class=\"post-content\">${post.content.replace(/\\n/g, '<br>')}</div>\n        <button class=\"approve-result-btn\" onclick=\"approveResult(${post.poll_id}, '${post.platform}')\">✅ Approve & Post</button>\n      </div>\n    `;\n  });\n  \n  postSections += `</div>`;\n});\n\nconst html = `\n<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>Nepal News - Poll Results Dashboard</title>\n  <script src=\"https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js\"></script>\n  <style>\n    * { margin: 0; padding: 0; box-sizing: border-box; }\n    body { \n      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;\n      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n      padding: 20px;\n      min-height: 100vh;\n    }\n    .container { \n      max-width: 1400px; \n      margin: 0 auto; \n      background: white;\n      border-radius: 12px;\n      box-shadow: 0 10px 40px rgba(0,0,0,0.2);\n      overflow: hidden;\n    }\n    .header {\n      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n      color: white;\n      padding: 40px;\n      text-align: center;\n    }\n    .header h1 { font-size: 36px; margin-bottom: 10px; }\n    .content { padding: 40px; }\n    .result-section {\n      margin: 40px 0;\n      padding: 30px;\n      background: #f8f9fa;\n      border-radius: 12px;\n      box-shadow: 0 2px 8px rgba(0,0,0,0.1);\n    }\n    .result-section h2 {\n      font-size: 24px;\n      color: #2c3e50;\n      margin-bottom: 20px;\n      text-align: center;\n    }\n    .stats {\n      display: flex;\n      gap: 20px;\n      margin-bottom: 30px;\n      justify-content: center;\n    }\n    .stat-box {\n      background: white;\n      padding: 20px 40px;\n      border-radius: 8px;\n      text-align: center;\n      box-shadow: 0 2px 4px rgba(0,0,0,0.1);\n    }\n    .stat-box.winner {\n      background: linear-gradient(135deg, #28a745 0%, #20873a 100%);\n      color: white;\n    }\n    .stat-value {\n      font-size: 32px;\n      font-weight: 700;\n      margin-bottom: 5px;\n    }\n    .stat-label {\n      font-size: 14px;\n      opacity: 0.8;\n    }\n    .chart-container {\n      position: relative;\n      height: 400px;\n      background: white;\n      padding: 20px;\n      border-radius: 8px;\n      box-shadow: 0 2px 4px rgba(0,0,0,0.1);\n    }\n    .posts-section {\n      margin: 40px 0;\n      padding: 30px;\n      background: #ecf0f1;\n      border-radius: 12px;\n    }\n    .posts-section h3 {\n      color: #2c3e50;\n      margin-bottom: 20px;\n    }\n    .post-preview {\n      background: white;\n      padding: 20px;\n      margin: 15px 0;\n      border-radius: 8px;\n      box-shadow: 0 2px 4px rgba(0,0,0,0.1);\n    }\n    .platform-badge {\n      display: inline-block;\n      padding: 6px 12px;\n      color: white;\n      border-radius: 20px;\n      font-size: 12px;\n      font-weight: 600;\n      margin-bottom: 10px;\n    }\n    .facebook { background: #1877f2; }\n    .instagram { background: #e4405f; }\n    .linkedin { background: #0077b5; }\n    .post-content {\n      margin: 15px 0;\n      line-height: 1.6;\n      color: #34495e;\n    }\n    .approve-result-btn {\n      background: linear-gradient(135deg, #28a745 0%, #20873a 100%);\n      color: white;\n      border: none;\n      padding: 10px 20px;\n      border-radius: 6px;\n      cursor: pointer;\n      font-weight: 600;\n      transition: all 0.3s;\n    }\n    .approve-result-btn:hover {\n      transform: scale(1.05);\n      box-shadow: 0 4px 12px rgba(40, 167, 69, 0.4);\n    }\n  </style>\n</head>\n<body>\n  <div class=\"container\">\n    <div class=\"header\">\n      <h1>📊 Nepal News Poll Results</h1>\n      <p>Interactive Dashboard with Voting Statistics</p>\n    </div>\n    <div class=\"content\">\n      ${chartSections}\n      ${postSections}\n    </div>\n  </div>\n  \n  <script>\n    function approveResult(pollId, platform) {\n      if (confirm('Approve and post results to ' + platform + '?')) {\n        fetch('/webhook/approve-post', {\n          method: 'POST',\n          headers: { 'Content-Type': 'application/json' },\n          body: JSON.stringify({ postId: pollId, action: 'approve', type: 'result' })\n        })\n        .then(response => response.json())\n        .then(data => {\n          alert('Results posted successfully!');\n          location.reload();\n        })\n        .catch(error => alert('Error: ' + error.message));\n      }\n    }\n  </script>\n</body>\n</html>\n`;\n\nreturn { json: { html } };"
+      },
+      "id": "a05f9f7b-5fab-493c-b30c-1653f41c17d5",
+      "name": "Generate Results Dashboard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "tableId": "social_media_posts",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "platform",
+              "fieldValue": "={{ $json.platform }}"
+            },
+            {
+              "fieldId": "poll_id",
+              "fieldValue": "={{ $json.poll_id }}"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $json.content }}"
+            },
+            {
+              "fieldId": "post_type",
+              "fieldValue": "={{ $json.post_type }}"
+            },
+            {
+              "fieldId": "chart_data",
+              "fieldValue": "={{ $json.chart_data }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "={{ $json.status }}"
+            },
+            {
+              "fieldId": "created_at",
+              "fieldValue": "={{ $json.created_at }}"
+            }
+          ]
+        }
+      },
+      "id": "a40e1963-bb6d-45ab-840b-3402580a0977",
+      "name": "Store Result Posts in DB",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        880,
+        944
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "2T23U5z02FSqxCnu",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "e73b627e-7316-4cd0-84ef-aba95767b776",
+      "name": "Return Results Page",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1104,
+        1104
+      ]
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2640,
+        0
+      ],
+      "id": "5bf7246e-5958-42e8-a118-e81a6f0fb861",
+      "name": "Wait",
+      "webhookId": "1972f05d-40d3-4217-94db-7c4181d2a5e8"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate all polls and posts created in this execution\nconst socialPosts = $('Store Social Posts').all();\nconst pendingPolls = $('Get Pending Polls').all();\n\n// Group by poll\nconst pollSummary = {};\n\nfor (const post of socialPosts) {\n  const data = post.json;\n  const pollId = data.poll_id;\n  \n  if (!pollSummary[pollId]) {\n    pollSummary[pollId] = {\n      poll_id: pollId,\n      platforms: [],\n      post_count: 0\n    };\n  }\n  \n  pollSummary[pollId].platforms.push(data.platform);\n  pollSummary[pollId].post_count++;\n}\n\n// Get poll details\nconst pollDetails = [];\nfor (const poll of pendingPolls) {\n  const data = poll.json;\n  const summary = pollSummary[data.id];\n  \n  pollDetails.push({\n    id: data.id,\n    title: data.title,\n    category: data.category,\n    question: data.poll_question,\n    platforms: summary?.platforms || [],\n    post_count: summary?.post_count || 0\n  });\n}\n\n// Create summary statistics\nconst stats = {\n  total_polls: pendingPolls.length,\n  total_posts: socialPosts.length,\n  by_category: {},\n  by_platform: {}\n};\n\n// Count by category\nfor (const poll of pendingPolls) {\n  const category = poll.json.category || 'Other';\n  stats.by_category[category] = (stats.by_category[category] || 0) + 1;\n}\n\n// Count by platform\nfor (const post of socialPosts) {\n  const platform = post.json.platform;\n  stats.by_platform[platform] = (stats.by_platform[platform] || 0) + 1;\n}\n\n// Return single item with all aggregated data\nreturn [{\n  json: {\n    polls: pollDetails,\n    stats: stats,\n    execution_time: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3552,
+        0
+      ],
+      "id": "ea66573d-04e4-4592-8c5b-168a62b7ac5a",
+      "name": "Code in JavaScript"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook - Main Trigger": {
+      "main": [
+        [
+          {
+            "node": "Extract RSS Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract RSS Sources": {
+      "main": [
+        [
+          {
+            "node": "Split Sources to Array",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Sources to Array": {
+      "main": [
+        [
+          {
+            "node": "Fetch RSS Feed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch RSS Feed": {
+      "main": [
+        [
+          {
+            "node": "Parse RSS Feed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse RSS Feed": {
+      "main": [
+        [
+          {
+            "node": "Clean RSS Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean RSS Data": {
+      "main": [
+        [
+          {
+            "node": "Categorize News (OpenAI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Categorize News (OpenAI)": {
+      "main": [
+        [
+          {
+            "node": "Add Category",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Category": {
+      "main": [
+        [
+          {
+            "node": "Create Poll Question (OpenAI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Poll Question (OpenAI)": {
+      "main": [
+        [
+          {
+            "node": "Process Poll Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Poll Data": {
+      "main": [
+        [
+          {
+            "node": "Store in Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store in Supabase": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Pending Polls": {
+      "main": [
+        [
+          {
+            "node": "Create Social Media Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Social Media Posts": {
+      "main": [
+        [
+          {
+            "node": "Store Social Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Social Posts": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Admin Dashboard": {
+      "main": [
+        [
+          {
+            "node": "Get Draft Posts from DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Draft Posts from DB": {
+      "main": [
+        [
+          {
+            "node": "Generate Admin Dashboard HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Admin Dashboard HTML": {
+      "main": [
+        [
+          {
+            "node": "Return Dashboard HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Approve/Reject Post": {
+      "main": [
+        [
+          {
+            "node": "Check Action Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Action Type": {
+      "main": [
+        [
+          {
+            "node": "Approve Post in DB",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject Post in DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approve Post in DB": {
+      "main": [
+        [
+          {
+            "node": "Merge Actions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reject Post in DB": {
+      "main": [
+        [
+          {
+            "node": "Merge Actions",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Actions": {
+      "main": [
+        [
+          {
+            "node": "Respond to Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Poll Results": {
+      "main": [
+        [
+          {
+            "node": "Get All Poll Votes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get All Poll Votes": {
+      "main": [
+        [
+          {
+            "node": "Calculate Poll Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Poll Results": {
+      "main": [
+        [
+          {
+            "node": "Create Result Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Result Posts": {
+      "main": [
+        [
+          {
+            "node": "Generate Results Dashboard",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Store Result Posts in DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Results Dashboard": {
+      "main": [
+        [
+          {
+            "node": "Return Results Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Get Pending Polls",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Admin Notification": {
+      "main": [
+        []
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Email Admin Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "de886562-9f20-4f3b-8b6b-8f6044fe1804",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e43d643c21c25495ab501ae1342ee864865c74622946e53a35f4d5d2eea2670a"
+  },
+  "id": "Kd6SCQiv64tL3jIE",
+  "tags": []
+}
